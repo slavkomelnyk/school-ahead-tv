@@ -1,4 +1,4 @@
-mak# Development guide
+# Development guide
 
 This guide covers setup, configuration, builds, and releases for School TV. For end user instructions, see the [README](README.md).
 
