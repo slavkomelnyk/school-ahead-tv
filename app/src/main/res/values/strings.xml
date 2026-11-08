@@ -1,0 +1,21 @@
+<resources>
+    <string name="app_name">School</string>
+    <string name="loading">Loading…</string>
+    <string name="error_title">Connection Error</string>
+    <string name="error_network">No internet connection</string>
+    <string name="error_generic">Could not load content</string>
+    <string name="error_message_default">The website could not be loaded. Check the address and your internet connection, then try again.</string>
+    <string name="error_retry">Retry</string>
+    <string name="error_close">Close</string>
+    <string name="media_back">Back</string>
+    <string name="media_play">Play</string>
+    <string name="media_pause">Pause</string>
+    <string name="media_rewind">−10</string>
+    <string name="media_forward">+10</string>
+    <string name="media_close">Done</string>
+    <string name="media_stop">Stop</string>
+    <string name="media_maximize">Maximize</string>
+    <string name="media_minimize">Minimize</string>
+    <string name="media_speed">Speed</string>
+    <string name="media_quality">Quality</string>
+</resources>

@@ -1,0 +1,7 @@
+<resources>
+    <color name="school_black">#FF000000</color>
+    <color name="school_blue">#FF3D5AFE</color>
+    <color name="school_blue_dark">#FF2A3FB0</color>
+    <color name="school_surface">#FF1E1E1E</color>
+    <color name="school_surface_light">#FF2C2C2C</color>
+</resources>
