@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
+import com.ahead.school.R
 import com.ahead.school.ui.screens.web.TvWebViewScreen
 
 
@@ -35,7 +37,7 @@ fun SchoolApp(
     Box(modifier = modifier.fillMaxSize()) {
         // Use the hybrid TvWebViewScreen
         TvWebViewScreen(
-            url = "https://school.stabrise.com/uk/subjects",
+            url = stringResource(R.string.start_website_url),
             modifier = Modifier.fillMaxSize()
         )
     }

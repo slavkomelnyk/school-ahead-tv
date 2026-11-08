@@ -3,6 +3,14 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+val releaseSigningValues = listOf(
+    providers.gradleProperty("RELEASE_STORE_FILE").orNull,
+    providers.gradleProperty("RELEASE_STORE_PASSWORD").orNull,
+    providers.gradleProperty("RELEASE_KEY_ALIAS").orNull,
+    providers.gradleProperty("RELEASE_KEY_PASSWORD").orNull,
+)
+val hasReleaseSigning = releaseSigningValues.all { !it.isNullOrBlank() }
+
 android {
     namespace = "com.ahead.school"
     compileSdk = 35
@@ -15,10 +23,24 @@ android {
         versionName = "1.0.0"
     }
 
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = file(releaseSigningValues[0]!!)
+                storePassword = releaseSigningValues[1]
+                keyAlias = releaseSigningValues[2]
+                keyPassword = releaseSigningValues[3]
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

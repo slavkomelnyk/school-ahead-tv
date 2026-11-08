@@ -125,6 +125,8 @@ class TvMediaBridge(private val onMediaStateUpdate: (TvMediaState) -> Unit) {
                         isFullscreen: false,
                         source: 'none'
                     };
+                    let pendingYouTubeSeekTarget = null;
+                    let pendingYouTubeSeekUntil = 0;
 
                     // YouTube domain patterns
                     const YOUTUBE_DOMAINS = ['youtube.com', 'youtube-nocookie.com', 'youtu.be'];
@@ -284,7 +286,10 @@ class TvMediaBridge(private val onMediaStateUpdate: (TvMediaState) -> Unit) {
                                     state.isPlaying = (data.info.playerState === 1);
                                 }
                                 if (data.info.currentTime !== undefined) {
-                                    state.currentTime = data.info.currentTime;
+                                    if (Date.now() >= pendingYouTubeSeekUntil) {
+                                        state.currentTime = data.info.currentTime;
+                                        pendingYouTubeSeekTarget = null;
+                                    }
                                 }
                                 if (data.info.duration !== undefined) {
                                     state.duration = data.info.duration;
@@ -452,7 +457,14 @@ class TvMediaBridge(private val onMediaStateUpdate: (TvMediaState) -> Unit) {
 
                         const media = getActiveMedia();
                         if (media) {
-                            const newTime = Math.max(0, Math.min(media.duration || 0, media.currentTime + amount));
+                            const currentTime = Number.isFinite(media.currentTime) ? media.currentTime : 0;
+                            const duration = Number.isFinite(media.duration) && media.duration > 0
+                                ? media.duration
+                                : null;
+                            const requestedTime = Math.max(0, currentTime + amount);
+                            const newTime = duration === null
+                                ? requestedTime
+                                : Math.min(duration, requestedTime);
                             media.currentTime = newTime;
                             publishState();
                             return;
@@ -460,7 +472,23 @@ class TvMediaBridge(private val onMediaStateUpdate: (TvMediaState) -> Unit) {
 
                         const yt = getYouTubeIframe();
                         if (yt) {
-                            commandYouTube(yt, 'seekTo', [Math.max(0, state.currentTime + amount), true]);
+                            const now = Date.now();
+                            const currentTime = now < pendingYouTubeSeekUntil &&
+                                pendingYouTubeSeekTarget !== null
+                                ? pendingYouTubeSeekTarget
+                                : state.currentTime;
+                            const requestedTime = Math.max(0, currentTime + amount);
+                            const targetTime = state.duration > 0
+                                ? Math.min(state.duration, requestedTime)
+                                : requestedTime;
+
+                            // Keep rapid button presses relative to the latest requested seek,
+                            // even before the YouTube iframe reports its updated playback time.
+                            pendingYouTubeSeekTarget = targetTime;
+                            pendingYouTubeSeekUntil = now + 1500;
+                            state.currentTime = targetTime;
+                            commandYouTube(yt, 'seekTo', [targetTime, true]);
+                            publishState();
                         }
                     };
 

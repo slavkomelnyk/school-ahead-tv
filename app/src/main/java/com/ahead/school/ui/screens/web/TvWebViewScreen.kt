@@ -21,6 +21,7 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.os.SystemClock
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
@@ -31,6 +32,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -38,6 +40,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -50,6 +53,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.ahead.school.R
+import com.ahead.school.MainActivity
 import com.ahead.school.bridge.TvMediaBridge
 import com.ahead.school.bridge.TvMediaState
 import com.ahead.school.bridge.tvEnterFullscreen
@@ -62,6 +67,8 @@ import com.ahead.school.core.findActivity
 import com.ahead.school.model.MediaState
 import com.ahead.school.ui.screens.media.MediaOverlay
 import java.net.URLEncoder
+
+private const val BACK_DOUBLE_PRESS_WINDOW_MS = 2_000L
 
 
 /**
@@ -95,7 +102,7 @@ private fun TvMediaState.toMediaState(): MediaState {
  * @param url The URL to load in the WebView
  * @param modifier Modifier for the composable
  */
-@SuppressLint("SetJavaScriptEnabled")
+@SuppressLint("SetJavaScriptEnabled", "JavascriptInterface")
 @Composable
 fun TvWebViewScreen(
     url: String,
@@ -107,6 +114,7 @@ fun TvWebViewScreen(
     var errorMessage by remember { mutableStateOf("") }
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    val mainActivity = remember(context) { context.findActivity() as? MainActivity }
 
     // Media state from bridge
     var tvMediaState by remember { mutableStateOf(TvMediaState()) }
@@ -117,6 +125,7 @@ fun TvWebViewScreen(
     var isOverlayVisible by remember { mutableStateOf(false) }
     var autoShowOverlay by remember { mutableStateOf(true) }
     var lastMediaSource by remember { mutableStateOf<String?>(null) }
+    var lastBackPressedAt by remember { mutableStateOf(0L) }
 
     // Media bridge
     val mediaBridge = remember {
@@ -139,6 +148,72 @@ fun TvWebViewScreen(
             // Reset auto-show flag when video source changes
             if (sourceChanged && state.hasMedia) {
                 autoShowOverlay = true
+            }
+        }
+    }
+
+    fun hideMediaControls() {
+        isOverlayVisible = false
+        autoShowOverlay = false
+        webViewInstance?.requestFocus()
+    }
+
+    DisposableEffect(mainActivity) {
+        onDispose { mainActivity?.setAppKeyEventHandler(null) }
+    }
+
+    SideEffect {
+        mainActivity?.setAppKeyEventHandler { event ->
+            if (event.action != KeyEvent.ACTION_DOWN || event.repeatCount > 0 || !tvMediaState.hasMedia) {
+                false
+            } else {
+                when (event.keyCode) {
+                    KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+                    KeyEvent.KEYCODE_MEDIA_PLAY,
+                    KeyEvent.KEYCODE_MEDIA_PAUSE -> {
+                        webViewInstance?.tvPlayPause()
+                        webViewInstance != null
+                    }
+                    KeyEvent.KEYCODE_MEDIA_REWIND -> {
+                        webViewInstance?.tvSeekBy(-10.0)
+                        webViewInstance != null
+                    }
+                    KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> {
+                        webViewInstance?.tvSeekBy(10.0)
+                        webViewInstance != null
+                    }
+                    KeyEvent.KEYCODE_DPAD_LEFT,
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                        if (isOverlayVisible) {
+                            false
+                        } else {
+                            webViewInstance?.tvSeekBy(
+                                if (event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT) -10.0 else 10.0
+                            )
+                            webViewInstance != null
+                        }
+                    }
+                    KeyEvent.KEYCODE_MENU -> {
+                        if (isOverlayVisible) {
+                            hideMediaControls()
+                        } else {
+                            isOverlayVisible = true
+                            autoShowOverlay = false
+                        }
+                        true
+                    }
+                    KeyEvent.KEYCODE_DPAD_CENTER,
+                    KeyEvent.KEYCODE_ENTER -> {
+                        if (tvMediaState.isFullscreen && !isOverlayVisible) {
+                            isOverlayVisible = true
+                            autoShowOverlay = false
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    else -> false
+                }
             }
         }
     }
@@ -201,27 +276,27 @@ fun TvWebViewScreen(
     // ---------------------------------------------------------------------------
 
     BackHandler(enabled = true) {
+        val now = SystemClock.elapsedRealtime()
         when {
-            // If overlay is visible and in fullscreen, hide it
-            isOverlayVisible && tvMediaState.isFullscreen -> {
-                isOverlayVisible = false
-                autoShowOverlay = false  // User manually closed, don't auto-show again
-                true
+            isOverlayVisible -> {
+                hideMediaControls()
+                lastBackPressedAt = now
             }
-            // If in fullscreen (and overlay not visible), exit fullscreen
-            tvMediaState.isFullscreen -> {
-                webViewInstance?.tvExitFullscreen()
-                true
+            lastBackPressedAt != 0L && now - lastBackPressedAt <= BACK_DOUBLE_PRESS_WINDOW_MS -> {
+                lastBackPressedAt = 0L
+                context.findActivity()?.moveTaskToBack(true)
             }
-            // Try to go back in WebView
-            webViewInstance?.canGoBack() == true -> {
-                webViewInstance?.goBack()
-                true
-            }
-            // Exit app
             else -> {
-                context.findActivity()?.finish()
-                true
+                lastBackPressedAt = now
+                when {
+                    tvMediaState.isFullscreen -> webViewInstance?.tvExitFullscreen()
+                    webViewInstance?.canGoBack() == true -> webViewInstance?.goBack()
+                    else -> Toast.makeText(
+                        context,
+                        R.string.back_again_to_minimize,
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
             }
         }
     }
@@ -367,44 +442,6 @@ fun TvWebViewScreen(
                         }
                     }
 
-                    setOnKeyListener { _, keyCode, event ->
-                        if (event.action == KeyEvent.ACTION_DOWN) {
-                            when (keyCode) {
-                                KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
-                                KeyEvent.KEYCODE_MEDIA_PLAY,
-                                KeyEvent.KEYCODE_MEDIA_PAUSE -> {
-                                    tvPlayPause()
-                                    true
-                                }
-                                // MENU button can toggle overlay in normal mode
-                                // and in fullscreen mode
-                                KeyEvent.KEYCODE_MENU -> {
-                                    if (tvMediaState.hasMedia) {
-                                        isOverlayVisible = !isOverlayVisible
-                                        // If hiding, disable auto-show
-                                        if (!isOverlayVisible) {
-                                            autoShowOverlay = false
-                                        }
-                                        true
-                                    } else {
-                                        false
-                                    }
-                                }
-                                // In fullscreen, OK/ENTER toggles overlay visibility
-                                KeyEvent.KEYCODE_DPAD_CENTER,
-                                KeyEvent.KEYCODE_ENTER -> {
-                                    if (tvMediaState.isFullscreen) {
-                                        isOverlayVisible = !isOverlayVisible
-                                        true
-                                    } else {
-                                        false
-                                    }
-                                }
-                                else -> false
-                            }
-                        } else false
-                    }
-
                     loadUrl(url)
                     webViewInstance = this
                 }
@@ -444,6 +481,8 @@ fun TvWebViewScreen(
             state = tvMediaState.toMediaState(),
             visible = isOverlayVisible,
             onPlayPause = { webViewInstance?.tvPlayPause() },
+            onSeekBackward = { webViewInstance?.tvSeekBy(-10.0) },
+            onSeekForward = { webViewInstance?.tvSeekBy(10.0) },
             onFullscreen = { 
                 if (tvMediaState.isFullscreen) {
                     webViewInstance?.tvExitFullscreen()
@@ -451,11 +490,8 @@ fun TvWebViewScreen(
                     webViewInstance?.tvEnterFullscreen()
                 }
             },
-            onBack = { webViewInstance?.goBack() },
-            onCloseOverlay = { 
-                isOverlayVisible = false
-                autoShowOverlay = false  // User manually closed, don't auto-show again
-            },
+            onExitFullscreen = { webViewInstance?.tvExitFullscreen() },
+            onCloseOverlay = { hideMediaControls() },
         )
     }
 }

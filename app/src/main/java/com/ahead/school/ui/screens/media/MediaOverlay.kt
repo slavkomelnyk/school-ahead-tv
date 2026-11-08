@@ -18,8 +18,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -38,6 +38,7 @@ import androidx.tv.material3.Text
 import com.ahead.school.R
 import com.ahead.school.model.MediaState
 import com.ahead.school.ui.components.TvPrimaryButton
+import com.ahead.school.ui.components.TvProgressBar
 import com.ahead.school.ui.theme.Dimens
 import com.ahead.school.util.formatTime
 
@@ -62,8 +63,10 @@ fun MediaOverlay(
     state: MediaState,
     visible: Boolean,
     onPlayPause: () -> Unit,
+    onSeekBackward: () -> Unit,
+    onSeekForward: () -> Unit,
     onFullscreen: () -> Unit,
-    onBack: () -> Unit,
+    onExitFullscreen: () -> Unit,
     onCloseOverlay: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -96,35 +99,65 @@ fun MediaOverlay(
         exit = fadeOut(),
         modifier = modifier,
     ) {
-        // Main overlay container - transparent background
+        // Keep the video visible behind a legible TV control panel.
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color.Transparent),
         ) {
-            // Bottom controls panel with semi-transparent background
-            Box(
+            Column(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f))
-                    .padding(horizontal = Dimens.OverlayPadding, vertical = 16.dp),
-            ) {
-                // Small control buttons row - optimized for slow TVs
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(vertical = 8.dp),
-                ) {
-                    // Close button - small, to hide overlay
-                    TvPrimaryButton(
-                        text = stringResource(R.string.media_close),
-                        onClick = onCloseOverlay,
-                        compact = true,
-                        modifier = Modifier.height(36.dp),
+                    .background(
+                        MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+                        RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
                     )
+                    .padding(horizontal = Dimens.OverlayPadding, vertical = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                if (state.duration > 0f) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = stringResource(
+                                when (state.source.lowercase()) {
+                                    "youtube" -> R.string.media_source_youtube
+                                    "html5" -> R.string.media_source_html5
+                                    else -> R.string.media_source_video
+                                }
+                            ),
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Text(
+                            text = "${formatTime(state.currentTime)} / ${formatTime(state.duration)}",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                    TvProgressBar(
+                        progress = state.progress,
+                        onSeekBy = { delta ->
+                            if (delta < 0) onSeekBackward() else onSeekForward()
+                        },
+                        step = 10f,
+                    )
+                }
 
-                    // Play/Pause button - small
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterHorizontally),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TvPrimaryButton(
+                        text = stringResource(R.string.media_rewind),
+                        onClick = onSeekBackward,
+                        compact = true,
+                    )
                     TvPrimaryButton(
                         text = stringResource(
                             if (requestedPlaying) R.string.media_pause
@@ -136,26 +169,22 @@ fun MediaOverlay(
                         },
                         focusRequester = playFocus,
                         compact = true,
-                        modifier = Modifier.height(36.dp),
                     )
-
-                    // Fullscreen button - small (only show when not already in fullscreen)
+                    TvPrimaryButton(
+                        text = stringResource(R.string.media_forward),
+                        onClick = onSeekForward,
+                        compact = true,
+                    )
+                    TvPrimaryButton(
+                        text = stringResource(R.string.media_close),
+                        onClick = onCloseOverlay,
+                        compact = true,
+                    )
                     if (!state.isFullscreen) {
                         TvPrimaryButton(
                             text = stringResource(R.string.media_maximize),
                             onClick = onFullscreen,
                             compact = true,
-                            modifier = Modifier.height(36.dp),
-                        )
-                    }
-
-                    // Time display - small, only show when duration is available
-                    if (state.duration > 0f) {
-                        Text(
-                            text = "${formatTime(state.currentTime)} / ${formatTime(state.duration)}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.padding(start = 16.dp),
                         )
                     }
                 }
@@ -171,8 +200,8 @@ fun MediaOverlay(
                         .padding(16.dp),
                 ) {
                     TvPrimaryButton(
-                        text = stringResource(R.string.media_back),
-                        onClick = onBack,
+                        text = stringResource(R.string.media_exit_fullscreen),
+                        onClick = onExitFullscreen,
                         compact = true,
                     )
                 }
