@@ -88,7 +88,13 @@ private const val CONTROLS_TIMEOUT_MS = 4000L
  */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun VideoPlayer(videoId: String, title: String, onClose: () -> Unit) {
+fun VideoPlayer(
+    videoId: String,
+    title: String,
+    startSeconds: Int,
+    onProgress: (position: Float, duration: Float) -> Unit,
+    onClose: () -> Unit
+) {
     val context = LocalContext.current
     val focusRequester = remember { FocusRequester() }
     val playFocusRequester = remember { FocusRequester() }
@@ -109,7 +115,7 @@ fun VideoPlayer(videoId: String, title: String, onClose: () -> Unit) {
             settings.mediaPlaybackRequiresUserGesture = false
             webChromeClient = WebChromeClient()
             webViewClient = WebViewClient()
-            loadDataWithBaseURL(origin, playerPage(videoId, origin), "text/html", "utf-8", null)
+            loadDataWithBaseURL(origin, playerPage(videoId, origin, startSeconds), "text/html", "utf-8", null)
         }
     }
 
@@ -164,6 +170,8 @@ fun VideoPlayer(videoId: String, title: String, onClose: () -> Unit) {
                         position = values.getDouble(1).toFloat(),
                         duration = values.getDouble(2).toFloat()
                     )
+                    // Playing, paused or ended: before that the position is not real yet.
+                    if (playback.state in 0..2) onProgress(playback.position, playback.duration)
                 }
             }
             delay(500)
@@ -465,7 +473,7 @@ private fun formatTime(seconds: Float): String {
     return if (total >= 3600) "${total / 3600}:$time" else time
 }
 
-private fun playerPage(videoId: String, origin: String) = """
+private fun playerPage(videoId: String, origin: String, startSeconds: Int) = """
 <!DOCTYPE html>
 <html>
 <head>
@@ -475,7 +483,7 @@ private fun playerPage(videoId: String, origin: String) = """
 </head>
 <body>
 <iframe id="player"
-  src="https://www.youtube.com/embed/$videoId?enablejsapi=1&autoplay=1&playsinline=1&controls=0&disablekb=1&fs=0&rel=0&iv_load_policy=3&origin=$origin"
+  src="https://www.youtube.com/embed/$videoId?enablejsapi=1&autoplay=1&playsinline=1&controls=0&disablekb=1&fs=0&rel=0&iv_load_policy=3&start=$startSeconds&origin=$origin"
   allow="autoplay; encrypted-media"
   referrerpolicy="strict-origin-when-cross-origin"></iframe>
 <script src="https://www.youtube.com/iframe_api"></script>

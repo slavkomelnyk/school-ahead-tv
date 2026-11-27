@@ -4,9 +4,16 @@ An Android TV app for browsing and watching [Stabrise School](https://school.sta
 
 ## Features
 
-- Subjects in a side navigation drawer
-- Topic filters and search within the selected subject
-- Lesson list that loads more as you scroll (20 per page)
+- Home page with a row of videos for each subject, starting with the subject's icon and name
+- Subject pages with a row of videos for each topic; rows load more as you scroll
+- Light and dark theme, following the device setting
+- Home header with a clock and **Continue watching**, which resumes the last unfinished video (95% counts as finished)
+- Subject banner with the picture and title of the focused video
+- Subjects ordered by videos watched on this device; one moves up only when it has 25 more than the subject above
+- Side navigation drawer with **Home** and the app version
+- A video that is already playing is not interrupted when the connection drops
+- Search within the selected subject, with results in a grid
+- Three video cards across the screen in every row and in search results
 - Saved subjects, topics, and first lesson pages shown at once when available, then refreshed from the server
 - Full-screen YouTube playback with TV-friendly controls
 - Screen stays awake while the app is open
@@ -39,8 +46,9 @@ For command-line builds, the SDK location must be set in `local.properties` (`sd
 
 ### Browsing
 
-- Open the side drawer to switch subjects.
-- Select a topic chip to filter lessons, or **All Topics** to remove the filter.
+- On the home page, select a video to play it, or the subject card at the start of a row to see its topics.
+- Press Back on a subject, or choose **Home** in the drawer, to return to the home page.
+- On a subject page, move up and down between topics, and left and right between videos.
 - Select the search field to type, then press the keyboard's search key. **Clear search** resets it.
 - Select a lesson card to play its video.
 
@@ -82,6 +90,8 @@ Sources are in `app/src/main/java/com/stabrise/school/`:
 | `MainActivity.kt` | Entry point and browsing UI |
 | `data/SchoolApi.kt` | Retrofit service and HTTP cache |
 | `data/SchoolModels.kt` | API models and YouTube link extraction |
+| `data/WatchStats.kt` | Videos opened per subject, saved on the device |
+| `data/ContinueWatching.kt` | Unfinished videos and their positions, saved on the device |
 | `ui/SchoolTvViewModel.kt` | Screen state and loading |
 | `ui/VideoPlayer.kt` | YouTube player and playback controls |
 | `ui/theme/` | Colors, typography, and theme |

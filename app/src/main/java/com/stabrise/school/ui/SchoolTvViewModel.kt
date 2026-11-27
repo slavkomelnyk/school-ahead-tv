@@ -6,18 +6,40 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.stabrise.school.data.ContinueWatching
 import com.stabrise.school.data.FROM_CACHE
 import com.stabrise.school.data.Lesson
 import com.stabrise.school.data.LessonTopic
 import com.stabrise.school.data.NetworkModule
 import com.stabrise.school.data.Subject
+import com.stabrise.school.data.UnfinishedVideo
+import com.stabrise.school.data.WatchStats
 import com.stabrise.school.data.youTubeVideoId
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 
-data class PlayingVideo(val videoId: String, val title: String)
+/** The video in the player; [video] holds the position it starts from. */
+data class PlayingVideo(val video: UnfinishedVideo)
+
+/** Which lessons a row shows: a whole subject, one of its topics, or a search in it. */
+data class RowKey(val subjectId: Int, val topicId: Int? = null, val query: String? = null)
+
+/** The video to focus when a page is shown again. */
+data class FocusTarget(val row: RowKey, val lessonId: Int?)
+
+/** One horizontal row of lessons, loaded page by page. */
+class LessonRowData {
+    /** Null until the first page has arrived. */
+    var lessons by mutableStateOf<List<Lesson>?>(null)
+    var failed by mutableStateOf(false)
+    var count = 0
+    var busy = false
+
+    /** Kept here so the row position survives a visit to the player. */
+    val listState = LazyListState()
+}
 
 class SchoolTvViewModel : ViewModel() {
     var subjects by mutableStateOf<List<Subject>>(emptyList())
@@ -26,31 +48,27 @@ class SchoolTvViewModel : ViewModel() {
     var selectedSubject by mutableStateOf<Subject?>(null)
         private set
 
-    var topics by mutableStateOf<List<LessonTopic>>(emptyList())
-        private set
-
-    var selectedTopic by mutableStateOf<LessonTopic?>(null)
-        private set
-
-    var lessons by mutableStateOf<List<Lesson>>(emptyList())
-        private set
-
-    var lessonCount by mutableStateOf(0)
+    /** Topics of the selected subject; null until they have arrived. */
+    var topics by mutableStateOf<List<LessonTopic>?>(null)
         private set
 
     /** Search text within the selected subject; empty means no search. */
     var searchQuery by mutableStateOf("")
         private set
 
-    /** Kept here so the row position survives a visit to the player. */
-    var lessonRowState by mutableStateOf(LazyListState())
-        private set
-
-    var lastOpenedLessonId: Int? = null
-        private set
-
     var playingVideo by mutableStateOf<PlayingVideo?>(null)
         private set
+
+    /** The last video that was not watched to the end, shown in the home header. */
+    var continueVideo by mutableStateOf(ContinueWatching.all().firstOrNull())
+        private set
+
+    /** The home header takes focus after a video was continued from it. */
+    var homeHeaderFocused = true
+        private set
+
+    private var progress: UnfinishedVideo? = null
+    private var savedPosition = 0f
 
     var isLoading by mutableStateOf(false)
         private set
@@ -62,7 +80,22 @@ class SchoolTvViewModel : ViewModel() {
     var notice by mutableStateOf<String?>(null)
         private set
 
-    private var loadJob: Job? = null
+    /** Subject to focus on the home page. */
+    var lastSubjectId: Int? = null
+        private set
+
+    var homeFocus: FocusTarget? = null
+        private set
+
+    var subjectFocus: FocusTarget? = null
+        private set
+
+    /** Vertical position of the subject page. */
+    var subjectListState = LazyListState()
+        private set
+
+    private val rows = mutableMapOf<RowKey, LessonRowData>()
+    private var topicsJob: Job? = null
     private var openJob: Job? = null
 
     init {
@@ -70,65 +103,118 @@ class SchoolTvViewModel : ViewModel() {
     }
 
     fun loadSubjects() {
-        // Not part of load(): choosing a subject must not cancel the refresh of this list.
         viewModelScope.launch {
             isLoading = true
             errorMessage = null
             try {
-                cachedThenFresh({ NetworkModule.api.getSubjects(it) }) { list ->
-                    subjects = list
-                    if (selectedSubject == null) list.firstOrNull()?.let { selectSubject(it) }
-                }
+                cachedThenFresh({ NetworkModule.api.getSubjects(it) }) { subjects = it }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 if (subjects.isEmpty()) errorMessage = e.localizedMessage ?: "Failed to load subjects"
             } finally {
-                if (selectedSubject == null) isLoading = false
+                isLoading = false
             }
         }
     }
 
     fun selectSubject(subject: Subject) {
+        openJob?.cancel()
         selectedSubject = subject
-        selectedTopic = null
+        lastSubjectId = subject.id
+        homeHeaderFocused = false
+        homeFocus = null
+        subjectFocus = null
+        subjectListState = LazyListState()
         searchQuery = ""
-        topics = emptyList()
-        reloadSubject()
+        topics = null
+        notice = null
+        loadTopics(subject.id)
     }
 
-    fun selectTopic(topic: LessonTopic?) {
-        selectedTopic = topic
-        reloadLessons()
+    fun goHome() {
+        if (selectedSubject == null) return
+        openJob?.cancel()
+        topicsJob?.cancel()
+        selectedSubject = null
+        searchQuery = ""
+        topics = null
+        notice = null
+        isLoading = false
+        errorMessage = null
     }
 
     fun search(query: String) {
         if (query.trim() == searchQuery) return
         searchQuery = query.trim()
-        reloadLessons()
-    }
-
-    fun loadMore() {
-        val subject = selectedSubject ?: return
-        if (loadJob?.isActive == true || lessons.size >= lessonCount) return
-        load {
-            val page = NetworkModule.api.getLessonsPage(
-                subjectId = subject.id,
-                topicId = selectedTopic?.id,
-                query = searchQuery.ifEmpty { null },
-                offset = lessons.size
-            )
-            lessons = (lessons + page.items).distinctBy { it.id }
-            lessonCount = page.count
-        }
+        subjectFocus = null
+        subjectListState = LazyListState()
+        notice = null
     }
 
     fun retry() {
-        if (selectedSubject == null) loadSubjects() else reloadSubject()
+        val subject = selectedSubject
+        if (subject == null) loadSubjects() else loadTopics(subject.id)
     }
 
-    fun openLesson(lesson: Lesson) {
-        lastOpenedLessonId = lesson.id
+    fun row(key: RowKey): LessonRowData = rows.getOrPut(key) { LessonRowData() }
+
+    /** Loads the first page of a row once. A failed row can be loaded again. */
+    fun loadRow(key: RowKey) {
+        val row = row(key)
+        if (row.lessons != null || row.busy) return
+        row.failed = false
+        // No next page until the first one is final.
+        row.busy = true
+        viewModelScope.launch {
+            try {
+                cachedThenFresh({
+                    NetworkModule.api.getLessonsPage(key.subjectId, key.topicId, key.query, cache = it)
+                }) {
+                    row.count = it.count
+                    row.lessons = it.items
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (row.lessons == null) row.failed = true
+            } finally {
+                row.busy = false
+            }
+        }
+    }
+
+    /** Adds the next page to a row. */
+    fun loadMore(key: RowKey) {
+        val row = row(key)
+        val loaded = row.lessons ?: return
+        if (row.busy || loaded.size >= row.count) return
+        row.busy = true
+        viewModelScope.launch {
+            try {
+                val page = NetworkModule.api.getLessonsPage(
+                    key.subjectId, key.topicId, key.query, offset = loaded.size
+                )
+                row.count = page.count
+                row.lessons = (loaded + page.items).distinctBy { it.id }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // The row keeps what it has; moving along it asks again.
+            } finally {
+                row.busy = false
+            }
+        }
+    }
+
+    fun openLesson(lesson: Lesson, key: RowKey) {
+        if (selectedSubject == null) {
+            lastSubjectId = key.subjectId
+            homeHeaderFocused = false
+            homeFocus = FocusTarget(key, lesson.id)
+        } else {
+            subjectFocus = FocusTarget(key, lesson.id)
+        }
         notice = null
         openJob?.cancel()
         openJob = viewModelScope.launch {
@@ -137,7 +223,19 @@ class SchoolTvViewModel : ViewModel() {
                 if (videoId == null) {
                     notice = "This lesson has no video"
                 } else {
-                    playingVideo = PlayingVideo(videoId, lesson.title)
+                    // An unfinished video goes on where it stopped.
+                    val saved = ContinueWatching.all().find { it.lessonId == lesson.id && it.videoId == videoId }
+                    play(
+                        UnfinishedVideo(
+                            lessonId = lesson.id,
+                            subjectId = key.subjectId,
+                            videoId = videoId,
+                            title = lesson.title,
+                            iconUrl = lesson.iconUrl,
+                            position = saved?.position ?: 0f,
+                            duration = saved?.duration ?: 0f
+                        )
+                    )
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -147,42 +245,56 @@ class SchoolTvViewModel : ViewModel() {
         }
     }
 
+    fun continueWatching() {
+        val video = continueVideo ?: return
+        openJob?.cancel()
+        notice = null
+        homeHeaderFocused = true
+        play(video)
+    }
+
+    /** Position reported by the player; saved every few seconds and when the player closes. */
+    fun onProgress(position: Float, duration: Float) {
+        val video = playingVideo?.video ?: return
+        if (position < 1f || duration <= 0f) return
+        val updated = video.copy(position = position, duration = duration)
+        progress = updated
+        val finished = ContinueWatching.isFinished(position, duration)
+        if (finished || abs(position - savedPosition) >= 5f) saveProgress()
+    }
+
     fun closePlayer() {
+        saveProgress()
         playingVideo = null
     }
 
-    /** Topics and lessons are requested at the same time. */
-    private fun reloadSubject() {
-        val subject = selectedSubject ?: return
-        clearLessons()
-        load {
-            coroutineScope {
-                if (topics.isEmpty()) {
-                    launch {
-                        cachedThenFresh({ NetworkModule.api.getLessonTopics(subject.id, it) }) { topics = it }
-                    }
-                }
-                showFirstPage(subject.id)
+    private fun play(video: UnfinishedVideo) {
+        WatchStats.add(video.subjectId)
+        progress = null
+        savedPosition = video.position
+        playingVideo = PlayingVideo(video)
+    }
+
+    private fun saveProgress() {
+        val video = progress ?: return
+        savedPosition = video.position
+        ContinueWatching.save(video)
+        continueVideo = ContinueWatching.all().firstOrNull()
+    }
+
+    private fun loadTopics(subjectId: Int) {
+        topicsJob?.cancel()
+        isLoading = true
+        errorMessage = null
+        topicsJob = viewModelScope.launch {
+            try {
+                cachedThenFresh({ NetworkModule.api.getLessonTopics(subjectId, it) }) { topics = it }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (topics == null) errorMessage = e.localizedMessage ?: "Failed to load topics"
             }
-        }
-    }
-
-    private fun reloadLessons() {
-        val subject = selectedSubject ?: return
-        // A topic list that has not arrived yet is requested again.
-        if (topics.isEmpty()) return reloadSubject()
-        clearLessons()
-        load { showFirstPage(subject.id) }
-    }
-
-    private suspend fun showFirstPage(subjectId: Int) {
-        val topicId = selectedTopic?.id
-        val query = searchQuery.ifEmpty { null }
-        cachedThenFresh({
-            NetworkModule.api.getLessonsPage(subjectId, topicId, query, cache = it)
-        }) { page ->
-            lessons = page.items
-            lessonCount = page.count
+            isLoading = false
         }
     }
 
@@ -199,35 +311,5 @@ class SchoolTvViewModel : ViewModel() {
             // Nothing saved yet.
         }
         show(request(null))
-    }
-
-    private fun clearLessons() {
-        openJob?.cancel()
-        lessons = emptyList()
-        lessonCount = 0
-        lessonRowState = LazyListState()
-        lastOpenedLessonId = null
-        notice = null
-    }
-
-    /** Only the latest request may update the screen. */
-    private fun load(block: suspend () -> Unit) {
-        loadJob?.cancel()
-        isLoading = true
-        errorMessage = null
-        var job: Job? = null
-        job = viewModelScope.launch(start = kotlinx.coroutines.CoroutineStart.LAZY) {
-            try {
-                block()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                errorMessage = e.localizedMessage ?: "Failed to load"
-            } finally {
-                if (loadJob === job) isLoading = false
-            }
-        }
-        loadJob = job
-        job.start()
     }
 }
